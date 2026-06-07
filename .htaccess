@@ -1,0 +1,4 @@
+# Block direct web access to sensitive files
+<FilesMatch "^(auth_users|manage_users)\.php$">
+    Require all denied
+</FilesMatch>

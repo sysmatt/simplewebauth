@@ -1,0 +1,157 @@
+#!/usr/bin/env bash
+# authctl — wrapper for manage_users.php
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MANAGE="${SCRIPT_DIR}/manage_users.php"
+
+# ── helpers ──────────────────────────────────────────────────────────────────
+
+die()  { echo "error: $*" >&2; exit 1; }
+info() { echo "$*"; }
+
+require_php() {
+    command -v php &>/dev/null || die "php not found in PATH"
+}
+
+require_manage() {
+    [[ -f "$MANAGE" ]] || die "manage_users.php not found at: $MANAGE"
+}
+
+run() {
+    require_php
+    require_manage
+    php "$MANAGE" "$@"
+}
+
+# ── usage ─────────────────────────────────────────────────────────────────────
+
+usage_main() {
+    cat <<EOF
+authctl — manage PHP auth users
+
+Usage:
+  authctl <command> [options]
+
+Commands:
+  list                    List all configured users
+  add <username>          Add a new user (prompts for password)
+  remove <username>       Remove a user
+  passwd <username>       Change a user's password
+  check                   Verify environment (php, manage_users.php)
+
+Options:
+  -h, --help              Show this help message
+
+Run 'authctl <command> --help' for command-specific help.
+EOF
+}
+
+usage_add() {
+    cat <<EOF
+Usage: authctl add <username>
+
+Add a new user. You will be prompted to enter a password.
+Passwords must be at least 8 characters.
+
+Example:
+  authctl add alice
+  authctl add bob
+EOF
+}
+
+usage_remove() {
+    cat <<EOF
+Usage: authctl remove <username>
+
+Remove a user. This action cannot be undone.
+
+Example:
+  authctl remove alice
+EOF
+}
+
+usage_passwd() {
+    cat <<EOF
+Usage: authctl passwd <username>
+
+Change the password for an existing user.
+You will be prompted to enter the new password.
+
+Example:
+  authctl passwd alice
+EOF
+}
+
+# ── commands ──────────────────────────────────────────────────────────────────
+
+cmd_list() {
+    run list
+}
+
+cmd_add() {
+    [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]] && { usage_add; exit 0; }
+    [[ $# -lt 1 ]] && { usage_add >&2; exit 1; }
+    local username="$1"
+    run add "$username"
+}
+
+cmd_remove() {
+    [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]] && { usage_remove; exit 0; }
+    [[ $# -lt 1 ]] && { usage_remove >&2; exit 1; }
+    local username="$1"
+
+    read -r -p "Remove user '${username}'? This cannot be undone. [y/N] " confirm
+    [[ "$confirm" =~ ^[Yy]$ ]] || { info "Aborted."; exit 0; }
+
+    run remove "$username"
+}
+
+cmd_passwd() {
+    [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]] && { usage_passwd; exit 0; }
+    [[ $# -lt 1 ]] && { usage_passwd >&2; exit 1; }
+    local username="$1"
+    run passwd "$username"
+}
+
+cmd_check() {
+    local ok=true
+
+    if command -v php &>/dev/null; then
+        info "  php:             $(command -v php) ($(php -r 'echo PHP_VERSION;'))"
+    else
+        info "  php:             NOT FOUND"
+        ok=false
+    fi
+
+    if [[ -f "$MANAGE" ]]; then
+        info "  manage_users.php: $MANAGE"
+    else
+        info "  manage_users.php: NOT FOUND at $MANAGE"
+        ok=false
+    fi
+
+    local users_file="${SCRIPT_DIR}/auth_users.php"
+    if [[ -f "$users_file" ]]; then
+        info "  auth_users.php:  $users_file"
+    else
+        info "  auth_users.php:  NOT FOUND (will be created on first 'add')"
+    fi
+
+    $ok && info $'\nAll checks passed.' || { info $'\nOne or more checks failed.'; exit 1; }
+}
+
+# ── main ──────────────────────────────────────────────────────────────────────
+
+[[ $# -eq 0 ]] && { usage_main; exit 0; }
+
+case "$1" in
+    list)            shift; cmd_list "$@" ;;
+    add)             shift; cmd_add "$@" ;;
+    remove|rm|del)   shift; cmd_remove "$@" ;;
+    passwd|password) shift; cmd_passwd "$@" ;;
+    check)           shift; cmd_check "$@" ;;
+    -h|--help|help)  usage_main; exit 0 ;;
+    *)               echo "Unknown command: $1"; echo; usage_main >&2; exit 1 ;;
+esac
