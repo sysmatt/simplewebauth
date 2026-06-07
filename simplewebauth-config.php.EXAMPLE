@@ -1,0 +1,48 @@
+<?php
+// Self-guard: block direct web access if included outside of simplewebauth.
+if (!defined('AUTH_DIR')) { http_response_code(403); exit; }
+
+// ── UI Customization for simplewebauth ────────────────────────────────────────
+//
+// Copy this file to the parent directory (your docroot) as:
+//   simplewebauth-config.php
+//
+// This file is outside the simplewebauth/ code tree so git pulls will
+// never overwrite it.  Only UI/branding options belong here — security
+// settings (session lifetime, etc.) are configured in simplewebauth/auth.php.
+//
+// banner and footer are rendered as HTML, so you can include tags,
+// entities, and links.  app_name and logo_* are plain text.
+
+return [
+
+    // Text used as the page <title> and login card heading.
+    'app_name'  => 'My Tools',
+
+    // URL to a logo image displayed above the heading.
+    // Can be an absolute URL or a root-relative path.
+    // Remove or leave empty to show no logo.
+    'logo_url'  => '/logo.png',
+    'logo_alt'  => 'My Tools',
+
+    // Subtitle shown beneath the heading — useful for an access-policy notice.
+    // Rendered as HTML.
+    'banner'    => 'Authorized users only.',
+
+    // HTML rendered below the login card — copyright, links, contact info, etc.
+    'footer'    => '&copy; ' . date('Y') . ' ACME Corp &mdash; <a href="mailto:admin@example.com">Contact IT</a>',
+
+    // Full-screen background image behind the login card.
+    // Can be an absolute URL or a root-relative path.
+    // Remove or leave empty for no background image.
+    'bg_image_url' => '/bg.jpg',
+
+    // Semi-transparent overlay rendered between the background image and the card.
+    // Any valid CSS color works — rgba() lets you control opacity.
+    // Defaults to rgba(0,0,0,0.45) when bg_image_url is set.
+    // Set to '' to disable the overlay entirely.
+    //'bg_overlay' => 'rgba(0,0,0,0.45)',   // dark scrim   (default)
+    //'bg_overlay' => 'rgba(30,60,120,0.5)', // brand-color tint
+    //'bg_overlay' => '',                    // no overlay
+
+];

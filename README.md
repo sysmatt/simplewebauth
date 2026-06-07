@@ -14,6 +14,7 @@ Simple session-based authentication for small PHP utilities. Supports named user
 | `authctl` | Shell wrapper — the main tool for day-to-day user management |
 | `.htaccess` | Blocks web access to sensitive files (Apache) |
 | `simplewebauth-nginx.conf` | Nginx snippet — equivalent protection for Nginx servers |
+| `simplewebauth-config.php.EXAMPLE` | Template for docroot UI customization (copy to parent directory) |
 
 ## Setup
 
@@ -158,6 +159,40 @@ Edit `auth.php` directly to change these.
 - Sessions use `HttpOnly`, `SameSite=Lax`, and `Strict` mode cookies. If your site runs over HTTPS, the `Secure` flag is added automatically.
 - Login attempts are throttled with a 300ms delay on failure to slow brute force attacks. For internet-facing tools, consider adding fail2ban or rate limiting at the Apache/nginx level as well.
 - The `redirect` parameter on the login page is validated to prevent open redirects — only same-host URLs are allowed.
+
+## Login page customization
+
+The login page can be branded without touching any file inside the `simplewebauth/` directory. Copy the example config to your docroot:
+
+```bash
+cp simplewebauth/simplewebauth-config.php.EXAMPLE simplewebauth-config.php
+```
+
+Then edit `simplewebauth-config.php` to taste:
+
+```php
+<?php
+if (!defined('AUTH_DIR')) { http_response_code(403); exit; }
+
+return [
+    'app_name'    => 'My Tools',          // page <title> and card heading
+    'logo_url'    => '/logo.png',         // logo above the heading (omit to hide)
+    'logo_alt'    => 'My Tools',          // alt text for the logo
+    'banner'      => 'Authorized users only.',  // subtitle beneath heading (HTML)
+    'footer'      => '&copy; 2026 ACME Corp',  // below the card (HTML)
+    'bg_image_url'=> '/bg.jpg',           // full-screen background image
+    'bg_overlay'  => 'rgba(0,0,0,0.45)', // scrim over image (omit for default, '' to disable)
+];
+```
+
+**Notes:**
+- The file lives in the docroot (`../simplewebauth-config.php` relative to the `simplewebauth/` directory) — git pulls never touch it.
+- `banner` and `footer` are rendered as raw HTML, so tags, entities, and links work.
+- `app_name`, `logo_*`, `bg_image_url`, and `bg_overlay` are plain text/CSS values and are escaped before output.
+- `bg_image_url` uses `background-size: cover` — the image fills the screen and maintains its aspect ratio, cropping whichever axis doesn't fit. This is the standard professional login background behavior.
+- `bg_overlay` defaults to `rgba(0,0,0,0.45)` whenever a background image is set — a subtle dark scrim that ensures the white card is readable against any image. Set it to a brand color (`rgba(30,60,120,0.5)`) for a tinted look, or `''` to disable it entirely.
+- The self-guard at the top (`if (!defined('AUTH_DIR'))`) blocks direct browser access to the file without needing extra web server rules.
+- Omit any key to fall back to the default (no logo, no banner, no footer, no background image; heading reads "Sign in").
 
 ## Overriding the users file path
 
