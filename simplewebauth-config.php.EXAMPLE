@@ -37,6 +37,16 @@ return [
     // Remove or leave empty for no background image.
     'bg_image_url' => '/bg.jpg',
 
+    // ── Optional: pick a random background from a set of files ───────────────
+    // Uncomment the block below and remove the single 'bg_image_url' line above.
+    // Name your images bg_login_1.jpg, bg_login_2.jpg, etc. in the docroot
+    // (or adjust the glob pattern and URL prefix to match a subdirectory).
+    //
+    //'bg_image_url' => (function() {
+    //    $files = glob(__DIR__ . '/bg_login_*.{jpg,jpeg,png,webp}', GLOB_BRACE) ?: [];
+    //    return $files ? '/' . basename($files[array_rand($files)]) : '';
+    //})(),
+
     // Semi-transparent overlay rendered between the background image and the card.
     // Any valid CSS color works — rgba() lets you control opacity.
     // Defaults to rgba(0,0,0,0.45) when bg_image_url is set.
