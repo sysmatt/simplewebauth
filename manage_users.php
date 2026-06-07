@@ -14,7 +14,16 @@ if (php_sapi_name() !== 'cli') {
     exit('CLI only.');
 }
 
-$usersFile = __DIR__ . '/auth_users.php';
+$usersFile = defined('AUTH_USERS_FILE') ? AUTH_USERS_FILE : '/etc/simplewebauth/auth_users.php';
+
+function ensure_users_dir(string $file): void {
+    $dir = dirname($file);
+    if (is_dir($dir)) return;
+    if (!@mkdir($dir, 0750, true)) {
+        fwrite(STDERR, "Cannot create $dir — try running with sudo\n");
+        exit(1);
+    }
+}
 
 function load_users(string $file): array {
     if (!file_exists($file)) return [];
@@ -23,6 +32,7 @@ function load_users(string $file): array {
 }
 
 function save_users(string $file, array $users): void {
+    ensure_users_dir($file);
     $lines = ["<?php\n// User database — managed by manage_users.php\n\nreturn [\n"];
     foreach ($users as $u => $h) {
         $eu = addslashes($u);

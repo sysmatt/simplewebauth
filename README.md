@@ -7,7 +7,7 @@ Simple session-based authentication for small PHP utilities. Supports named user
 | File | Purpose |
 |---|---|
 | `auth.php` | Auth guard — require this at the top of each utility |
-| `auth_users.php` | User store (bcrypt hashes) — kept off the web via `.htaccess` |
+| `auth_users.php.EXAMPLE` | Template for the users file — the live file lives outside the docroot |
 | `login.php` | Login form |
 | `logout.php` | Destroys session and redirects to login |
 | `manage_users.php` | CLI backend for user management (called by `authctl`) |
@@ -25,7 +25,7 @@ Copy this directory to your web root (or a subdirectory). A common layout:
 /var/www/html/
 ├── simplewebauth/
 │   ├── auth.php
-│   ├── auth_users.php
+│   ├── auth_users.php.EXAMPLE
 │   ├── authctl
 │   ├── login.php
 │   ├── logout.php
@@ -34,18 +34,23 @@ Copy this directory to your web root (or a subdirectory). A common layout:
 ├── tool1.php
 ├── tool2.php
 └── tool3.php
+
+/etc/simplewebauth/          ← created automatically by authctl
+└── auth_users.php           ← live user database (owner: root:<webuser> 640)
 ```
 
 ### 2. Add users
 
-Run from the server CLI (not via the browser):
+Run from the server CLI (not via the browser). The first `add` creates `/etc/simplewebauth/` with correct ownership and permissions automatically — run with `sudo` so it can do that:
 
 ```bash
-./simplewebauth/authctl add alice
+sudo ./simplewebauth/authctl add alice
 # prompts for password
 ```
 
-Passwords must be at least 8 characters. Hashes are written to `auth_users.php`.
+Subsequent `add`, `passwd`, and `remove` commands also work without `sudo` once the directory exists, but running with `sudo` ensures file permissions stay tight (`root:<webuser> 640`).
+
+Passwords must be at least 8 characters. Hashes are written to `/etc/simplewebauth/auth_users.php`.
 
 ### 3. Protect each utility
 
@@ -145,12 +150,26 @@ Edit `auth.php` directly to change these.
 
 ## Security notes
 
-- **Never run `manage_users.php` via the browser** — the `.htaccess` blocks it, but keep it off publicly accessible paths anyway.
-- `auth_users.php`, `authctl`, `README.md`, and `LICENSE` are all blocked from web access by `.htaccess`. `.git/` and `.claude/` directories return 404 if requested.
+- **`auth_users.php` lives at `/etc/simplewebauth/auth_users.php`**, outside the docroot entirely — it cannot be served by the web server regardless of any config. The `.htaccess` and nginx snippet no longer need to block it.
+- **Never run `manage_users.php` via the browser** — the `.htaccess`/nginx snippet blocks it, but keep it off publicly accessible paths anyway.
+- `authctl`, `README.md`, and `LICENSE` are blocked from web access by `.htaccess`.
 - Verify Apache has `AllowOverride All` (or at minimum `AllowOverride AuthConfig Limit`) enabled for your directory, otherwise `.htaccess` rules are silently ignored.
+- `/etc/simplewebauth/` is created with `root:<webuser> 750` and `auth_users.php` with `root:<webuser> 640` — the web server process can read but not write the file, and other system users cannot read it at all.
 - Sessions use `HttpOnly`, `SameSite=Lax`, and `Strict` mode cookies. If your site runs over HTTPS, the `Secure` flag is added automatically.
 - Login attempts are throttled with a 300ms delay on failure to slow brute force attacks. For internet-facing tools, consider adding fail2ban or rate limiting at the Apache/nginx level as well.
 - The `redirect` parameter on the login page is validated to prevent open redirects — only same-host URLs are allowed.
+
+## Overriding the users file path
+
+The default path `/etc/simplewebauth/auth_users.php` can be changed by defining `AUTH_USERS_FILE` before requiring `auth.php`:
+
+```php
+<?php
+define('AUTH_USERS_FILE', '/srv/myapp/users.php');
+require __DIR__ . '/simplewebauth/auth.php';
+```
+
+Update `authctl`'s `USERS_DIR` and `USERS_FILE` variables at the top of the script to match.
 
 ## Web server configuration
 
@@ -200,7 +219,7 @@ server {
 }
 ```
 
-The pattern matches `auth_users.php` and `manage_users.php` inside any folder named `simplewebauth`, at any depth under the docroot.
+The pattern matches `manage_users.php` inside any folder named `simplewebauth`, at any depth under the docroot. `auth_users.php` no longer needs to be blocked — it lives outside the docroot entirely.
 
 Then reload Nginx:
 

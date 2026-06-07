@@ -2,6 +2,10 @@
 define('AUTH_DIR', __DIR__);
 define('AUTH_SESSION_NAME', 'phpauth');
 
+if (!defined('AUTH_USERS_FILE')) {
+    define('AUTH_USERS_FILE', '/etc/simplewebauth/auth_users.php');
+}
+
 ini_set('session.cookie_httponly', '1');
 ini_set('session.use_strict_mode', '1');
 ini_set('session.cookie_samesite', 'Lax');
@@ -38,7 +42,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $username = trim($_POST['username'] ?? '');
         $password = $_POST['password'] ?? '';
 
-        $users = require AUTH_DIR . '/auth_users.php';
+        $users = require AUTH_USERS_FILE;
 
         if (
             $username !== '' &&

@@ -11,6 +11,11 @@ define('AUTH_SESSION_LIFETIME', 28800); // 8 hours in seconds
 define('AUTH_SESSION_NAME', 'phpauth');
 define('AUTH_LOGIN_PAGE', AUTH_DIR . '/login.php');
 
+// Path to the users file — override by defining this constant before requiring auth.php
+if (!defined('AUTH_USERS_FILE')) {
+    define('AUTH_USERS_FILE', '/etc/simplewebauth/auth_users.php');
+}
+
 // Harden session cookies
 ini_set('session.cookie_httponly', '1');
 ini_set('session.use_strict_mode', '1');
