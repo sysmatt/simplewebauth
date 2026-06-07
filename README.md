@@ -12,7 +12,8 @@ Simple session-based authentication for small PHP utilities. Supports named user
 | `logout.php` | Destroys session and redirects to login |
 | `manage_users.php` | CLI backend for user management (called by `authctl`) |
 | `authctl` | Shell wrapper — the main tool for day-to-day user management |
-| `.htaccess` | Blocks web access to sensitive files |
+| `.htaccess` | Blocks web access to sensitive files (Apache) |
+| `simplewebauth-nginx.conf` | Nginx snippet — equivalent protection for Nginx servers |
 
 ## Setup
 
@@ -151,7 +152,9 @@ Edit `auth.php` directly to change these.
 - Login attempts are throttled with a 300ms delay on failure to slow brute force attacks. For internet-facing tools, consider adding fail2ban or rate limiting at the Apache/nginx level as well.
 - The `redirect` parameter on the login page is validated to prevent open redirects — only same-host URLs are allowed.
 
-## Apache requirement
+## Web server configuration
+
+### Apache
 
 `.htaccess` rules require `AllowOverride` to be enabled. In your Apache config or `/etc/apache2/sites-available/yoursite.conf`:
 
@@ -165,4 +168,42 @@ Then reload Apache:
 
 ```bash
 sudo systemctl reload apache2
+```
+
+### Nginx
+
+Nginx does not read `.htaccess` files — the snippet `simplewebauth-nginx.conf` provides the equivalent protection.
+
+**Why not `conf.d/`?** Files in `conf.d/` load at the `http {}` level where `location` blocks are not valid. The correct Nginx pattern is a snippet file included inside each `server {}` block — the rule lives in one place, you just reference it everywhere it's needed.
+
+**Install the snippet:**
+
+```bash
+sudo cp simplewebauth-nginx.conf /etc/nginx/snippets/simplewebauth.conf
+```
+
+**Add one line to each `server {}` block** in your site config (e.g. `/etc/nginx/sites-available/yoursite.conf`):
+
+```nginx
+server {
+    listen 80;
+    server_name example.com;
+    root /var/www/html;
+
+    include snippets/simplewebauth.conf;   # ← add this
+
+    location ~ \.php$ {
+        fastcgi_pass unix:/run/php/php-fpm.sock;
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+    }
+}
+```
+
+The pattern matches `auth_users.php` and `manage_users.php` inside any folder named `simplewebauth`, at any depth under the docroot.
+
+Then reload Nginx:
+
+```bash
+sudo nginx -t && sudo systemctl reload nginx
 ```
