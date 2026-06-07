@@ -145,7 +145,8 @@ Edit `auth.php` directly to change these.
 ## Security notes
 
 - **Never run `manage_users.php` via the browser** — the `.htaccess` blocks it, but keep it off publicly accessible paths anyway.
-- `auth_users.php` is also blocked from web access by `.htaccess`. Verify Apache has `AllowOverride All` (or at minimum `AllowOverride AuthConfig Limit`) enabled for your directory.
+- `auth_users.php`, `authctl`, `README.md`, and `LICENSE` are all blocked from web access by `.htaccess`. `.git/` and `.claude/` directories return 404 if requested.
+- Verify Apache has `AllowOverride All` (or at minimum `AllowOverride AuthConfig Limit`) enabled for your directory, otherwise `.htaccess` rules are silently ignored.
 - Sessions use `HttpOnly`, `SameSite=Lax`, and `Strict` mode cookies. If your site runs over HTTPS, the `Secure` flag is added automatically.
 - Login attempts are throttled with a 300ms delay on failure to slow brute force attacks. For internet-facing tools, consider adding fail2ban or rate limiting at the Apache/nginx level as well.
 - The `redirect` parameter on the login page is validated to prevent open redirects — only same-host URLs are allowed.
