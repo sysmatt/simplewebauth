@@ -21,6 +21,12 @@ ini_set('session.cookie_httponly', '1');
 ini_set('session.use_strict_mode', '1');
 ini_set('session.cookie_samesite', 'Lax');
 
+// Keep PHP's session GC from reaping the session file before our own
+// AUTH_SESSION_LIFETIME check expires it — otherwise sessions can be
+// garbage-collected after the server's default gc_maxlifetime (often
+// ~24 min) regardless of the 8-hour timeout implied above.
+ini_set('session.gc_maxlifetime', (string)AUTH_SESSION_LIFETIME);
+
 // Use HTTPS-only cookies if the request is over HTTPS
 if (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') {
     ini_set('session.cookie_secure', '1');

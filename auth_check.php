@@ -18,6 +18,10 @@ ini_set('session.cookie_httponly', '1');
 ini_set('session.use_strict_mode', '1');
 ini_set('session.cookie_samesite', 'Lax');
 
+// Keep PHP's session GC from reaping the session file before our own
+// AUTH_SESSION_LIFETIME check expires it (must match auth.php).
+ini_set('session.gc_maxlifetime', (string)AUTH_SESSION_LIFETIME);
+
 if (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') {
     ini_set('session.cookie_secure', '1');
 }
