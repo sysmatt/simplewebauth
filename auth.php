@@ -13,7 +13,11 @@ define('AUTH_LOGIN_PAGE', AUTH_DIR . '/login.php');
 
 // Path to the users file — override by defining this constant before requiring auth.php
 if (!defined('AUTH_USERS_FILE')) {
-    define('AUTH_USERS_FILE', '/etc/simplewebauth/auth_users.php');
+    // Prefer the .ini format (required for MFA) if it's been deployed;
+    // otherwise fall back to the legacy scalar-string .php format untouched.
+    define('AUTH_USERS_FILE', is_file('/etc/simplewebauth/auth_users.ini')
+        ? '/etc/simplewebauth/auth_users.ini'
+        : '/etc/simplewebauth/auth_users.php');
 }
 
 // Harden session cookies

@@ -24,7 +24,11 @@ require_once __DIR__ . '/mfa_totp.php';
 require_once __DIR__ . '/mfa_ntfy.php';
 require_once __DIR__ . '/mfa_qr.php';
 
-$usersFile = defined('AUTH_USERS_FILE') ? AUTH_USERS_FILE : '/etc/simplewebauth/auth_users.php';
+$usersFile = defined('AUTH_USERS_FILE') ? AUTH_USERS_FILE : (
+    is_file('/etc/simplewebauth/auth_users.ini')
+        ? '/etc/simplewebauth/auth_users.ini'
+        : '/etc/simplewebauth/auth_users.php'
+);
 
 function ensure_users_dir(string $file): void {
     $dir = dirname($file);

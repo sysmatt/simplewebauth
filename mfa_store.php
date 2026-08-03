@@ -23,7 +23,12 @@
 require_once __DIR__ . '/mfa_config.php';
 
 function mfa_users_file(): string {
-    return defined('AUTH_USERS_FILE') ? AUTH_USERS_FILE : '/etc/simplewebauth/auth_users.php';
+    if (defined('AUTH_USERS_FILE')) {
+        return AUTH_USERS_FILE;
+    }
+    return is_file('/etc/simplewebauth/auth_users.ini')
+        ? '/etc/simplewebauth/auth_users.ini'
+        : '/etc/simplewebauth/auth_users.php';
 }
 
 // ---------------------------------------------------------------------

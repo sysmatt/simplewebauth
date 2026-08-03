@@ -8,7 +8,11 @@
  */
 
 if (!defined('AUTH_USERS_FILE')) {
-    define('AUTH_USERS_FILE', '/etc/simplewebauth/auth_users.php');
+    // Prefer the .ini format (required for MFA) if it's been deployed;
+    // otherwise fall back to the legacy scalar-string .php format untouched.
+    define('AUTH_USERS_FILE', is_file('/etc/simplewebauth/auth_users.ini')
+        ? '/etc/simplewebauth/auth_users.ini'
+        : '/etc/simplewebauth/auth_users.php');
 }
 
 define('AUTH_SESSION_LIFETIME', 28800);   // must match auth.php (8 hours)
