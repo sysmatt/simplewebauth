@@ -87,6 +87,7 @@ if (empty($_SESSION['mfa_csrf_token'])) {
 }
 $csrf = $_SESSION['mfa_csrf_token'];
 $ntfyActive = !empty($_SESSION['mfa_ntfy_challenge']);
+$ntfyChallenge = $_SESSION['mfa_ntfy_challenge'] ?? '';
 $attemptsLeft = max(0, AUTH_MFA_MAX_ATTEMPTS - ($_SESSION['mfa_pending_strikes'] ?? 0));
 $errorHtml = $error ? '<p class="error">' . htmlspecialchars($error, ENT_QUOTES) . '</p>' : '';
 $loginUrlJs = mfa_relative_url('login.php');
@@ -141,8 +142,13 @@ $b = auth_branding();
   .push-status {
     font-size: .85rem; color: #666; margin-bottom: 1.25rem;
     padding: .6rem .75rem; background: #f7f9fc; border-radius: 5px;
+    text-align: center;
   }
   .push-status.expired { background: #fdf2ec; color: #a8672f; }
+  .push-code {
+    display: block; font-size: 1.8rem; font-weight: 700; letter-spacing: .3em;
+    font-family: ui-monospace, monospace; margin: .35rem 0 .15rem;
+  }
   .attempts { font-size: .78rem; color: #999; margin-top: .75rem; text-align: center; }
   .logo { display: block; max-width: 160px; max-height: 80px; margin: 0 auto 1.25rem; }
   .banner { font-size: .85rem; color: #666; margin-bottom: 1.25rem; }
@@ -180,10 +186,14 @@ $b = auth_branding();
   <?php if ($b['banner']): ?>
   <div class="banner"><?= $b['banner'] ?></div>
   <?php endif; ?>
-  <p class="sub">Enter your authenticator code or a backup code.<?= $ntfyActive ? ' A push notification has also been sent to your phone.' : '' ?></p>
+  <p class="sub">Enter your authenticator code or a backup code.</p>
   <?= $errorHtml ?>
   <?php if ($ntfyActive): ?>
-  <div class="push-status" id="pushStatus">Waiting for push approval&hellip;</div>
+  <div class="push-status" id="pushStatus">
+    A notification was also sent to your phone — enter this code there to approve:
+    <span class="push-code"><?= htmlspecialchars($ntfyChallenge, ENT_QUOTES) ?></span>
+    <span id="pushWaitingLabel">Waiting for your reply&hellip;</span>
+  </div>
   <?php endif; ?>
   <form method="post" autocomplete="off">
     <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf, ENT_QUOTES) ?>">

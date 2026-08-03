@@ -63,7 +63,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } elseif ($action === 'start_ntfy') {
         $topic = ntfy_generate_topic_url(AUTH_NTFY_SERVER);
         $challenge = ntfy_generate_challenge();
-        ntfy_publish($topic, 'SimpleWebAuth enrollment', "Reply with {$challenge} to confirm this device.");
+        // Same rule as login: the code is never in the push itself, only on
+        // this page — otherwise mere read-access to the topic (not actual
+        // possession of the device) would be enough to confirm it.
+        ntfy_publish($topic, 'SimpleWebAuth enrollment', 'Confirming a new device for push sign-in. Enter the code shown on your screen into this app.');
         $_SESSION['enroll_ntfy_url']       = $topic;
         $_SESSION['enroll_ntfy_challenge'] = $challenge;
         $_SESSION['enroll_ntfy_since']     = time();
@@ -218,15 +221,19 @@ $b = auth_branding();
     <?php if ($ntfyEnrolled): ?>
       <p>Sign-in push challenges are confirmed for this account.</p>
     <?php elseif ($ntfyPending): ?>
-      <p>In the <strong>ntfy</strong> app, subscribe to this topic (scan or open the link), then reply to the
-      notification already sent with the code it shows.</p>
+      <p>In the <strong>ntfy</strong> app, subscribe to this topic (scan or open the link). A confirmation
+      notification has already been sent — reply to it with the code shown below, not anything printed
+      in the notification itself.</p>
       <div class="qr">
         <?php if ($ntfyQr): ?><?= $ntfyQr ?><?php else: ?>
           <p><em>qrencode isn't installed on this server — open this link on your phone:</em></p>
         <?php endif; ?>
         <code class="value"><?= htmlspecialchars($_SESSION['enroll_ntfy_url'], ENT_QUOTES) ?></code>
       </div>
-      <div class="push-status" id="pushStatus">Waiting for your reply&hellip;</div>
+      <div class="push-status" id="pushStatus">
+        Your code: <strong><?= htmlspecialchars($_SESSION['enroll_ntfy_challenge'], ENT_QUOTES) ?></strong><br>
+        Waiting for your reply&hellip;
+      </div>
       <form method="post">
         <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf, ENT_QUOTES) ?>">
         <button type="submit" name="action" value="cancel_ntfy" class="secondary" formnovalidate>Cancel</button>

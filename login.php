@@ -71,14 +71,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $_SESSION['mfa_ntfy_challenge']       = $challenge;
                     $_SESSION['mfa_ntfy_since']           = time();
                     $_SESSION['mfa_ntfy_expired_counted'] = false;
+                    // The challenge is NEVER included in the push itself — only
+                    // the browser session that's actually signing in ever sees
+                    // it (rendered on mfa_verify.php). Anyone who can merely
+                    // read this ntfy topic must still see the live login screen
+                    // to know what to reply with; embedding the code in the
+                    // push would let topic read-access alone approve sign-ins.
                     // Fired once, immediately — arrives alongside the code
                     // dialog rather than on request. An unsolicited push is
                     // itself a signal the password may be compromised.
                     ntfy_publish(
                         $user['ntfy_url'],
                         'SimpleWebAuth sign-in',
-                        "Reply with {$challenge} to approve. If you didn't just try to sign in, " .
-                        "your password may be compromised — change it now."
+                        "Someone is signing in to your account. If this is you, enter the code shown " .
+                        "on your screen into this app. If you didn't just try to sign in, your password " .
+                        "may be compromised — change it now."
                     );
                 }
 
