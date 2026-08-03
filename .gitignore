@@ -1,2 +1,5 @@
 .claude
 auth_users.php
+auth_users.ini
+auth_users_local.ini
+burned_codes_local.ini

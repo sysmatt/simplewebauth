@@ -19,7 +19,10 @@ if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-$error = '';
+// Fixed, canned message only — never render an arbitrary query-string value.
+$error = ($_GET['notice'] ?? '') === 'mfa_reset'
+    ? 'Too many incorrect attempts. Please sign in again.'
+    : '';
 $redirect = $_GET['redirect'] ?? $_POST['redirect'] ?? '';
 
 // Validate redirect stays on the same host
@@ -42,14 +45,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $username = trim($_POST['username'] ?? '');
         $password = $_POST['password'] ?? '';
 
-        $users = require AUTH_USERS_FILE;
+        require_once AUTH_DIR . '/mfa_store.php';
+        $user = $username !== '' ? mfa_merged_user($username) : null;
 
-        if (
-            $username !== '' &&
-            isset($users[$username]) &&
-            password_verify($password, $users[$username])
-        ) {
+        if ($user !== null && password_verify($password, $user['password_hash'])) {
             session_regenerate_id(true);
+
+            if (!empty($user['mfa_enabled'])) {
+                // Password verified — second factor still required. Nothing
+                // is finalized (auth_user/auth_time) until mfa_verify.php
+                // confirms a TOTP code, a backup code, or an ntfy reply.
+                $_SESSION['mfa_pending_user']     = $username;
+                $_SESSION['mfa_pending_since']    = time();
+                $_SESSION['mfa_pending_redirect'] = $redirect;
+                $_SESSION['mfa_pending_strikes']  = 0;
+                unset($_SESSION['csrf_token']);
+
+                if (!empty($user['ntfy_url'])) {
+                    require_once AUTH_DIR . '/mfa_ntfy.php';
+                    $challenge = ntfy_generate_challenge();
+                    $_SESSION['mfa_ntfy_challenge']       = $challenge;
+                    $_SESSION['mfa_ntfy_since']           = time();
+                    $_SESSION['mfa_ntfy_expired_counted'] = false;
+                    // Fired once, immediately — arrives alongside the code
+                    // dialog rather than on request. An unsolicited push is
+                    // itself a signal the password may be compromised.
+                    ntfy_publish(
+                        $user['ntfy_url'],
+                        'SimpleWebAuth sign-in',
+                        "Reply with {$challenge} to approve. If you didn't just try to sign in, " .
+                        "your password may be compromised — change it now."
+                    );
+                }
+
+                $verifyAbs = realpath(AUTH_DIR . '/mfa_verify.php');
+                $docRoot = rtrim($_SERVER['DOCUMENT_ROOT'], '/');
+                header('Location: ' . str_replace($docRoot, '', $verifyAbs));
+                exit;
+            }
+
             $_SESSION['auth_user'] = $username;
             $_SESSION['auth_time'] = time();
             unset($_SESSION['csrf_token']);
@@ -71,23 +105,17 @@ $csrf = $_SESSION['csrf_token'];
 $redirectHtml = htmlspecialchars($redirect, ENT_QUOTES);
 $errorHtml = $error ? '<p class="error">' . htmlspecialchars($error, ENT_QUOTES) . '</p>' : '';
 
-// Load optional UI customization from ../simplewebauth-config.php (docroot, outside code tree)
-$ui = [];
-$uiConfigFile = dirname(AUTH_DIR) . '/simplewebauth-config.php';
-if (is_file($uiConfigFile)) {
-    $ui = (array)(require $uiConfigFile);
-}
-$uiAppName    = htmlspecialchars($ui['app_name']    ?? 'Sign in', ENT_QUOTES);
-$uiLogoUrl    = htmlspecialchars($ui['logo_url']    ?? '',         ENT_QUOTES);
-$uiLogoAlt    = htmlspecialchars($ui['logo_alt']    ?? '',         ENT_QUOTES);
-$uiBanner     = $ui['banner'] ?? '';   // rendered as HTML — admin-controlled
-$uiFooter     = $ui['footer'] ?? '';   // rendered as HTML — admin-controlled
-$uiBgImageUrl = htmlspecialchars($ui['bg_image_url'] ?? '', ENT_QUOTES);
-// Default scrim when a background image is set; set to '' to disable the overlay entirely
-$uiBgOverlay  = htmlspecialchars(
-    array_key_exists('bg_overlay', $ui) ? (string)$ui['bg_overlay'] : 'rgba(0,0,0,0.45)',
-    ENT_QUOTES
-);
+// Shared with mfa_verify.php/mfa_enroll.php so the whole flow, not just this
+// screen, carries the same visual identity.
+require_once AUTH_DIR . '/branding.php';
+$b = auth_branding();
+$uiAppName    = $b['app_name'];
+$uiLogoUrl    = $b['logo_url'];
+$uiLogoAlt    = $b['logo_alt'];
+$uiBanner     = $b['banner'];
+$uiFooter     = $b['footer'];
+$uiBgImageUrl = $b['bg_image_url'];
+$uiBgOverlay  = $b['bg_overlay'];
 ?>
 <!DOCTYPE html>
 <html lang="en">

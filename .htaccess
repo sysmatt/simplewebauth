@@ -3,6 +3,11 @@
     Require all denied
 </FilesMatch>
 
+# MFA / branding library files are include-only — never a direct web target
+<FilesMatch "^(mfa_(config|store|totp|ntfy|qr|session)|branding)\.php$">
+    Require all denied
+</FilesMatch>
+
 # Block documentation, scripts, and other non-web files
 <FilesMatch "^(README\.md|LICENSE|authctl)$">
     Require all denied

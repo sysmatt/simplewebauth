@@ -1,0 +1,18 @@
+; User database (.ini format) — required for MFA support.
+; Generate with `authctl migrate` (from an existing auth_users.php) or
+; `authctl add <username>` against a fresh install where AUTH_USERS_FILE
+; already points at a .ini path.
+;
+; One section per user. mfa_enabled/totp_secret/ntfy_url/backup_codes are all
+; optional — omit them entirely for a password-only user.
+
+; [alice]
+; password_hash = "$2y$12$..."
+; mfa_enabled   = true
+; totp_secret   = "JBSWY3DPEHPK3PXP"
+; ntfy_url      = "https://ntfy.sh/swauth-..."
+; backup_codes[] = "$2y$12$...hash of one backup code..."
+; backup_codes[] = "$2y$12$...hash of another..."
+
+; [bob]
+; password_hash = "$2y$12$..."

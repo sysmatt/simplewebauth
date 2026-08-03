@@ -1,17 +1,29 @@
 # PHP Drop-in Auth
 
-Simple session-based authentication for small PHP utilities. Supports named users with bcrypt-hashed passwords, CSRF protection, and an 8-hour sliding session.
+Simple session-based authentication for small PHP utilities. Supports named users with bcrypt-hashed passwords, CSRF protection, an 8-hour sliding session, and optional multi-factor authentication (TOTP, backup codes, and ntfy push challenge/response).
 
 ## Files
 
 | File | Purpose |
 |---|---|
 | `auth.php` | Auth guard — require this at the top of each utility |
-| `auth_users.php.EXAMPLE` | Template for the users file — the live file lives outside the docroot |
+| `auth_users.php.EXAMPLE` | Template for the legacy password-only users file |
+| `auth_users.ini.EXAMPLE` | Template for the `.ini` users file (required for MFA) |
 | `login.php` | Login form |
 | `logout.php` | Destroys session and redirects to login |
 | `manage_users.php` | CLI backend for user management (called by `authctl`) |
 | `authctl` | Shell wrapper — the main tool for day-to-day user management |
+| `mfa_config.php` | MFA constants — include-only, not a web endpoint |
+| `mfa_store.php` | MFA data layer (ini parsing, merge, locked writes) — include-only |
+| `mfa_totp.php` | RFC 6238 TOTP implementation — include-only |
+| `mfa_ntfy.php` | ntfy.sh push challenge/response helper — include-only |
+| `mfa_qr.php` | QR code rendering via the `qrencode` binary — include-only |
+| `mfa_session.php` | Shared pending-MFA session helpers — include-only |
+| `branding.php` | Shared UI branding loader — include-only, used by `login.php`, `mfa_verify.php`, and `mfa_enroll.php` |
+| `mfa_verify.php` | Second-factor verification page, reached after password login |
+| `mfa_check.php` | Background poll endpoint `mfa_verify.php` uses for ntfy replies |
+| `mfa_enroll.php` | Self-service MFA enrollment page (opt-in, see below) |
+| `mfa_enroll_check.php` | Background poll endpoint `mfa_enroll.php` uses for ntfy replies |
 | `.htaccess` | Blocks web access to sensitive files (Apache) |
 | `simplewebauth-nginx.conf` | Nginx snippet — equivalent protection for Nginx servers |
 | `simplewebauth-config.php.EXAMPLE` | Template for docroot UI customization (copy to parent directory) |
@@ -103,6 +115,15 @@ authctl remove <username>
 
 # Verify that php and manage_users.php are found and working
 authctl check
+
+# Convert the legacy auth_users.php to the .ini format (required for MFA)
+authctl migrate
+
+# MFA management — see "Multi-factor authentication" below
+authctl mfa new <username>
+authctl mfa pending
+authctl mfa merge
+authctl mfa disable <username>
 ```
 
 ### Help
@@ -147,7 +168,7 @@ Settings are constants defined at the top of `auth.php`:
 | `AUTH_SESSION_NAME` | `phpauth` | Cookie name for the session |
 | `AUTH_LOGIN_PAGE` | `simplewebauth/login.php` | Absolute filesystem path to the login page |
 
-Edit `auth.php` directly to change these.
+Edit `auth.php` directly to change these. MFA adds its own set of constants — see [Multi-factor authentication](#multi-factor-authentication) below.
 
 ## Security notes
 
@@ -159,6 +180,7 @@ Edit `auth.php` directly to change these.
 - Sessions use `HttpOnly`, `SameSite=Lax`, and `Strict` mode cookies. If your site runs over HTTPS, the `Secure` flag is added automatically.
 - Login attempts are throttled with a 300ms delay on failure to slow brute force attacks. For internet-facing tools, consider adding fail2ban or rate limiting at the Apache/nginx level as well.
 - The `redirect` parameter on the login page is validated to prevent open redirects — only same-host URLs are allowed.
+- MFA-specific security notes (ntfy topic secrecy, backup-code guarantees, push-fatigue defense model) are covered in [Multi-factor authentication](#multi-factor-authentication).
 
 ## Login page customization
 
@@ -205,6 +227,84 @@ require __DIR__ . '/simplewebauth/auth.php';
 ```
 
 Update `authctl`'s `USERS_DIR` and `USERS_FILE` variables at the top of the script to match.
+
+## Multi-factor authentication
+
+MFA is fully backward compatible: an existing install using the legacy `auth_users.php` format keeps working, password-only, with zero changes. MFA becomes available the moment an install migrates to the `.ini` format — the legacy scalar format simply can't carry the extra fields.
+
+Three methods are supported per user, in any combination:
+
+- **TOTP** — any standard authenticator app (Google Authenticator, Authy, FreeOTP, etc.)
+- **Backup codes** — one-time-use recovery codes, generated alongside the first method enrolled
+- **ntfy push challenge** — a push notification via [ntfy](https://ntfy.sh) (or a self-hosted instance) showing a short code; replying with that code approves the sign-in. Fires immediately on password success, in parallel with the code-entry field — not something the user has to request. An unsolicited push is itself a signal the password may be compromised.
+
+At login, if a user has MFA enabled, any enrolled method can complete it — a single field accepts either a TOTP code (6 digits) or a backup code (10 characters), dispatched automatically by length. Wrong attempts, a wrong ntfy reply, and an ntfy challenge timing out all count against one shared limit (3 by default) — hitting it resets all the way back to the password prompt.
+
+### Requirements
+
+- The users file must be `.ini` format (`authctl migrate` converts an existing legacy install in place, non-destructively — the original `.php` file is left untouched).
+- The `qrencode` binary must be installed on the server for QR codes to render (`apt install qrencode` / `dnf install qrencode`). Without it, enrollment still works — it falls back to showing the raw secret/URL as text to enter manually.
+- ntfy push requires outbound HTTPS access from the server to whichever ntfy server is configured (`https://ntfy.sh` by default, or your own self-hosted instance).
+
+### Two ways to enroll a user
+
+**Vault/Ansible-driven (offline, no server write):**
+
+```bash
+authctl mfa new alice
+```
+
+Prints a TOTP secret + QR, an ntfy topic URL + QR, and a set of backup codes — plus a ready-to-paste `.ini` stanza combining all of it. Nothing is written to any file; this is meant to be pasted into a vault-encrypted source and pushed out by your existing Ansible flow. Requires the user to already exist (`authctl add`).
+
+**Self-service (a user enrolls their own second factor):**
+
+Off by default. Enable by defining, before `auth.php` is required (e.g. alongside other `AUTH_*` constants):
+
+```php
+define('AUTH_ALLOW_SELF_MFA', true);
+```
+
+Then link an already-authenticated user to `mfa_enroll.php` (e.g. from wherever you show the logout link). It walks through TOTP and/or ntfy enrollment, requiring proof of possession — a correct current code, or a confirmed ntfy reply — before anything is saved, so a mis-scanned QR or unreachable ntfy topic can never silently lock in a broken second factor. Backup codes are generated and shown exactly once, the first time either method is confirmed.
+
+Self-enrolled data is written to a **separate overlay file**, never the vault-managed main file, and can never contain a password — a section only exists there for a user who already authenticated with a real password against the main file, so a compromise of the overlay alone can't create or impersonate an account. If a fleet is also vault-managed, the main file always wins field-by-field over the overlay, so a central push (including an explicit `mfa_enabled = false` kill switch) always supersedes anything a user self-enrolled.
+
+To fold self-enrolled data into your vault source: `authctl mfa pending` lists it and prints a fully-assembled stanza (real password hash + the new MFA fields) ready to paste. Once captured and pushed back down, `authctl mfa merge` prunes the now-redundant overlay entries — safe to run anytime, including on a schedule.
+
+### File locations
+
+| File | Path | Written by |
+|---|---|---|
+| Main users file | wherever `AUTH_USERS_FILE` points, `.ini` format | sysadmin / Ansible only |
+| Self-enrollment overlay | `AUTH_USERS_LOCAL_FILE` (default `/var/local/simplewebauth/auth_users_local.ini`) | the web server process |
+| Burned backup-code ledger | `AUTH_BURNED_CODES_FILE` (default `/var/local/simplewebauth/burned_codes_local.ini`) | the web server process |
+
+The main file stays exactly where host configuration belongs (`/etc/simplewebauth/`), read-only to the web server, unchanged from today. The two overlay files live under `/var/local/simplewebauth/` instead — the FHS convention for a locally-installed, unpackaged service's own runtime state — and are created automatically (`0700`, owned by the web user) the first time anything is written to them. Both directories/files need `authctl`'s permission-fixing step re-run if a root-run command (`authctl mfa merge`/`mfa disable`) touches the overlay file; `authctl` does this for you automatically.
+
+Backup-code one-time-use is a **per-host guarantee**, not a fleet-wide one — a code burned on one server isn't known to another. Deliberate trade-off for a small, flat-file, no-database tool; fine for a small user base, worth knowing if you run several load-balanced instances behind one login domain.
+
+### Configuration constants
+
+| Constant | Default | Description |
+|---|---|---|
+| `AUTH_USERS_LOCAL_FILE` | `/var/local/simplewebauth/auth_users_local.ini` | Self-enrollment overlay path |
+| `AUTH_BURNED_CODES_FILE` | `/var/local/simplewebauth/burned_codes_local.ini` | Backup-code ledger path |
+| `AUTH_ALLOW_SELF_MFA` | `false` | Enables `mfa_enroll.php` / `mfa_enroll_check.php` |
+| `AUTH_NTFY_SERVER` | `https://ntfy.sh` | Default server for minting new topics during self-enrollment only — the stored `ntfy_url` is a full self-contained URL, never reconstructed from this constant afterward |
+| `AUTH_MFA_PENDING_LIFETIME` | `300` (5 min) | How long a password-verified, second-factor-pending session stays valid |
+| `AUTH_MFA_MAX_ATTEMPTS` | `3` | Shared strike limit across all methods before resetting to password login |
+| `AUTH_MFA_NTFY_CHALLENGE_TTL` | `90` (seconds) | ntfy challenge expiry; a timeout counts as one strike |
+| `AUTH_MFA_BACKUP_CODE_COUNT` | `10` | Backup codes generated per enrollment |
+| `AUTH_MFA_BACKUP_CODE_LENGTH` | `10` | Characters per backup code |
+
+Define any of these before requiring `mfa_store.php` (transitively, before `auth.php`/`login.php` run) to override.
+
+### MFA security notes
+
+- The ntfy topic URL is a **bearer secret** on the public server — anyone who knows it can publish/subscribe. It's generated with a CSPRNG, never logged, and handled with the same care as the TOTP secret.
+- The ntfy challenge is deliberately low-entropy (2 characters) — the same technique as Microsoft Authenticator's "number matching." Its job is defeating blind push-fatigue spam-approval attacks, not brute-force resistance, and it does **not** defend against a real-time adversary-in-the-middle relaying a live phishing session.
+- `qrencode` is invoked with the data piped through **stdin**, never as a command-line argument — an argv value briefly appears in the process table, readable by any other local user running `ps aux` at the wrong moment.
+- All writes to the overlay/ledger files share one locking helper (`flock`-guarded read-modify-write + atomic rename), used identically by the web runtime and `authctl` — there's no second, independently-written implementation to drift out of sync.
+- Backup codes are bcrypt-hashed at rest everywhere, exactly like passwords.
 
 ## Web server configuration
 
