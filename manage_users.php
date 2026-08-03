@@ -187,12 +187,15 @@ switch ($cmd) {
                 echo "\n";
 
                 echo "=== Paste into your vault-managed $usersFile ===\n";
-                echo mfa_render_ini_users([$username => [
+                echo "Complete section, including the existing password_hash — replace this\n";
+                echo "user's [$username] section entirely, don't add a second one (a duplicate\n";
+                echo "section silently drops whichever fields were only in the first).\n\n";
+                echo mfa_render_ini_users([$username => array_merge($users[$username], [
                     'mfa_enabled'   => true,
                     'totp_secret'   => $totpSecret,
                     'ntfy_url'      => $ntfyUrl,
                     'backup_codes'  => $hashedCodes,
-                ]]);
+                ])]);
                 echo "\nNothing was written to disk — this only prints to your terminal.\n";
                 break;
 
