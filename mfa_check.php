@@ -55,10 +55,14 @@ $since = (int)$_SESSION['mfa_ntfy_since'];
 // 5s backdate cushion for clock skew between this server and ntfy's own timestamps.
 if (ntfy_check_challenge($user['ntfy_url'], $challenge, $since - 5)) {
     $redirect = $_SESSION['mfa_pending_redirect'] ?? '/';
+    $remember = ($_GET['remember'] ?? '0') === '1' && (int)$user['trust_device_days'] > 0;
     mfa_clear_pending_session();
     session_regenerate_id(true);
     $_SESSION['auth_user'] = $username;
     $_SESSION['auth_time'] = time();
+    if ($remember) {
+        mfa_set_trust_cookie($username, (int)$user['trust_device_days']);
+    }
     mfa_check_respond(['status' => 'approved', 'redirect' => $redirect]);
 }
 

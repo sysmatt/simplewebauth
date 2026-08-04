@@ -62,10 +62,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         if ($matched) {
             $redirect = $_SESSION['mfa_pending_redirect'] ?? '/';
+            $remember = !empty($_POST['remember_device']) && (int)$user['trust_device_days'] > 0;
             mfa_clear_pending_session();
             session_regenerate_id(true);
             $_SESSION['auth_user'] = $username;
             $_SESSION['auth_time'] = time();
+            if ($remember) {
+                mfa_set_trust_cookie($username, (int)$user['trust_device_days']);
+            }
             header('Location: ' . $redirect);
             exit;
         }
@@ -88,6 +92,7 @@ if (empty($_SESSION['mfa_csrf_token'])) {
 $csrf = $_SESSION['mfa_csrf_token'];
 $ntfyActive = !empty($_SESSION['mfa_ntfy_challenge']);
 $ntfyChallenge = $_SESSION['mfa_ntfy_challenge'] ?? '';
+$trustDays = (int)($user['trust_device_days'] ?? AUTH_MFA_TRUST_DEVICE_DAYS);
 $attemptsLeft = max(0, AUTH_MFA_MAX_ATTEMPTS - ($_SESSION['mfa_pending_strikes'] ?? 0));
 $errorHtml = $error ? '<p class="error">' . htmlspecialchars($error, ENT_QUOTES) . '</p>' : '';
 $loginUrlJs = mfa_relative_url('login.php');
@@ -150,6 +155,11 @@ $b = auth_branding();
     font-family: ui-monospace, monospace; margin: .35rem 0 .15rem;
   }
   .attempts { font-size: .78rem; color: #999; margin-top: .75rem; text-align: center; }
+  .remember-label {
+    display: flex; align-items: flex-start; gap: .5rem;
+    font-size: .8rem; color: #666; margin-bottom: 1rem; cursor: pointer;
+  }
+  .remember-label input { margin-top: .2rem; }
   .logo { display: block; max-width: 160px; max-height: 80px; margin: 0 auto 1.25rem; }
   .banner { font-size: .85rem; color: #666; margin-bottom: 1.25rem; }
   .footer { margin-top: .25rem; font-size: .8rem; color: #999; text-align: center; }
@@ -199,6 +209,12 @@ $b = auth_branding();
     <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf, ENT_QUOTES) ?>">
     <label for="code">Code</label>
     <input type="text" id="code" name="code" autofocus autocomplete="one-time-code" maxlength="<?= (int)AUTH_MFA_BACKUP_CODE_LENGTH ?>">
+    <?php if ($trustDays > 0): ?>
+    <label class="remember-label">
+      <input type="checkbox" name="remember_device" id="rememberDevice">
+      Remember this device for <?= $trustDays ?> days — don't check this on a shared or public computer
+    </label>
+    <?php endif; ?>
     <button type="submit">Verify</button>
   </form>
   <p class="attempts"><?= $attemptsLeft ?> attempt<?= $attemptsLeft === 1 ? '' : 's' ?> remaining</p>
@@ -211,8 +227,10 @@ $b = auth_branding();
 (function () {
   var statusEl = document.getElementById('pushStatus');
   var loginUrl = <?= json_encode($loginUrlJs) ?>;
+  var rememberBox = document.getElementById('rememberDevice');
   function poll() {
-    fetch('mfa_check.php', { credentials: 'same-origin' })
+    var remember = rememberBox && rememberBox.checked ? '1' : '0';
+    fetch('mfa_check.php?remember=' + remember, { credentials: 'same-origin' })
       .then(function (r) { return r.json(); })
       .then(function (data) {
         if (data.status === 'approved') {

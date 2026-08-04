@@ -12,6 +12,7 @@
  *   php manage_users.php mfa pending
  *   php manage_users.php mfa merge
  *   php manage_users.php mfa disable <username>
+ *   php manage_users.php mfa untrust <username>
  */
 
 if (php_sapi_name() !== 'cli') {
@@ -222,6 +223,10 @@ switch ($cmd) {
                     echo "Pruned (now defined centrally, so no longer needed locally):\n";
                     foreach ($pruned as $p) { echo "  - $p\n"; }
                 }
+                $expired = mfa_prune_expired_trust_devices();
+                echo $expired > 0
+                    ? "Pruned $expired expired trusted-device entr" . ($expired === 1 ? 'y' : 'ies') . ".\n"
+                    : "No expired trusted-device entries to prune.\n";
                 break;
 
             case 'disable':
@@ -236,6 +241,15 @@ switch ($cmd) {
                 }
                 break;
 
+            case 'untrust':
+                $username = $argv[3] ?? '';
+                if ($username === '') { echo "Usage: php manage_users.php mfa untrust <username>\n"; exit(1); }
+                $removed = mfa_revoke_trust_devices($username);
+                echo $removed > 0
+                    ? "Revoked $removed trusted device(s) for '$username'.\n"
+                    : "No trusted devices found for '$username'.\n";
+                break;
+
             default:
                 echo <<<HELP
 manage_users.php mfa — MFA management
@@ -247,8 +261,11 @@ Commands:
   mfa pending            List self-enrolled MFA data not yet captured into
                          the vault-managed main file, ready to paste.
   mfa merge              Prune local-overlay fields now redundant with the
-                         main file. Safe to run anytime.
+                         main file, and expired trusted-device entries.
+                         Safe to run anytime.
   mfa disable <username> Clear self-enrolled MFA data for a user.
+  mfa untrust <username> Revoke all "remembered devices" for a user (lost
+                         or stolen device, etc.).
 
 HELP;
         }

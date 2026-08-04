@@ -48,3 +48,18 @@ if (!defined('AUTH_MFA_BACKUP_CODE_COUNT')) {
 if (!defined('AUTH_MFA_BACKUP_CODE_LENGTH')) {
     define('AUTH_MFA_BACKUP_CODE_LENGTH', 10);
 }
+
+if (!defined('AUTH_TRUSTED_DEVICES_FILE')) {
+    define('AUTH_TRUSTED_DEVICES_FILE', '/var/local/simplewebauth/trusted_devices_local.ini');
+}
+
+// Default "remember this device" duration. Overridable per-user via the
+// trust_device_days ini field — 0 disables the feature for that user
+// entirely (checked live at login time, not just at issuance).
+if (!defined('AUTH_MFA_TRUST_DEVICE_DAYS')) {
+    define('AUTH_MFA_TRUST_DEVICE_DAYS', 60);
+}
+
+if (!defined('AUTH_MFA_TRUST_COOKIE_NAME')) {
+    define('AUTH_MFA_TRUST_COOKIE_NAME', 'phpauth_trust');
+}

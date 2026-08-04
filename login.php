@@ -55,7 +55,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($user !== null && password_verify($password, $user['password_hash'])) {
             session_regenerate_id(true);
 
-            if (!empty($user['mfa_enabled'])) {
+            // Trusted-device bypass — re-checked against the user's CURRENT
+            // trust_device_days setting every time, not just at issuance, so
+            // setting it to 0 immediately stops honoring any tokens already
+            // handed out, not just future ones.
+            $trustBypass = false;
+            if (!empty($user['mfa_enabled']) && (int)$user['trust_device_days'] > 0) {
+                $trustToken = $_COOKIE[AUTH_MFA_TRUST_COOKIE_NAME] ?? '';
+                $trustBypass = $trustToken !== '' && mfa_check_trust_token($username, $trustToken);
+            }
+
+            if (!empty($user['mfa_enabled']) && !$trustBypass) {
                 // Password verified — second factor still required. Nothing
                 // is finalized (auth_user/auth_time) until mfa_verify.php
                 // confirms a TOTP code, a backup code, or an ntfy reply.

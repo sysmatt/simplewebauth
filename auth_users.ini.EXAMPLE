@@ -3,8 +3,9 @@
 ; `authctl add <username>` against a fresh install where AUTH_USERS_FILE
 ; already points at a .ini path.
 ;
-; One section per user. mfa_enabled/totp_secret/ntfy_url/backup_codes are all
-; optional — omit them entirely for a password-only user.
+; One section per user. mfa_enabled/totp_secret/ntfy_url/backup_codes/
+; trust_device_days are all optional — omit them entirely for a
+; password-only user.
 
 ; [alice]
 ; password_hash = "$2y$12$..."
@@ -13,6 +14,11 @@
 ; ntfy_url      = "https://ntfy.sh/swauth-..."
 ; backup_codes[] = "$2y$12$...hash of one backup code..."
 ; backup_codes[] = "$2y$12$...hash of another..."
+; trust_device_days = 14   ; "remember this device" duration for this user only —
+;                          ; omit to use the AUTH_MFA_TRUST_DEVICE_DAYS default,
+;                          ; or set to 0 to disable device trust for this user
+;                          ; entirely (checked live at every login, not just
+;                          ; when a device is remembered)
 
 ; [bob]
 ; password_hash = "$2y$12$..."

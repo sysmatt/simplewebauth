@@ -124,6 +124,7 @@ authctl mfa new <username>
 authctl mfa pending
 authctl mfa merge
 authctl mfa disable <username>
+authctl mfa untrust <username>
 ```
 
 ### Help
@@ -277,6 +278,7 @@ To fold self-enrolled data into your vault source: `authctl mfa pending` lists i
 | Main users file | wherever `AUTH_USERS_FILE` points, `.ini` format | sysadmin / Ansible only |
 | Self-enrollment overlay | `AUTH_USERS_LOCAL_FILE` (default `/var/local/simplewebauth/auth_users_local.ini`) | the web server process |
 | Burned backup-code ledger | `AUTH_BURNED_CODES_FILE` (default `/var/local/simplewebauth/burned_codes_local.ini`) | the web server process |
+| Trusted-device ledger | `AUTH_TRUSTED_DEVICES_FILE` (default `/var/local/simplewebauth/trusted_devices_local.ini`) | the web server process |
 
 The main file stays exactly where host configuration belongs (`/etc/simplewebauth/`), read-only to the web server, unchanged from today. The two overlay files live under `/var/local/simplewebauth/` instead — the FHS convention for a locally-installed, unpackaged service's own runtime state — and are created automatically (`0700`, owned by the web user) the first time anything is written to them. Both directories/files need `authctl`'s permission-fixing step re-run if a root-run command (`authctl mfa merge`/`mfa disable`) touches the overlay file; `authctl` does this for you automatically.
 
@@ -295,8 +297,23 @@ Backup-code one-time-use is a **per-host guarantee**, not a fleet-wide one — a
 | `AUTH_MFA_NTFY_CHALLENGE_TTL` | `90` (seconds) | ntfy challenge expiry; a timeout counts as one strike |
 | `AUTH_MFA_BACKUP_CODE_COUNT` | `10` | Backup codes generated per enrollment |
 | `AUTH_MFA_BACKUP_CODE_LENGTH` | `10` | Characters per backup code |
+| `AUTH_TRUSTED_DEVICES_FILE` | `/var/local/simplewebauth/trusted_devices_local.ini` | Trusted-device ledger path |
+| `AUTH_MFA_TRUST_DEVICE_DAYS` | `60` | Default "remember this device" duration — overridable per user via `trust_device_days` in the `.ini` record; `0` disables the feature for that user |
+| `AUTH_MFA_TRUST_COOKIE_NAME` | `phpauth_trust` | Cookie name for the device-trust token |
 
 Define any of these before requiring `mfa_store.php` (transitively, before `auth.php`/`login.php` run) to override.
+
+### Remembering a device
+
+A "remember this device" checkbox appears on `mfa_verify.php` whenever the signing-in user's resolved `trust_device_days` is greater than zero (global default `60`, overridable per user — see `auth_users.ini.EXAMPLE`). Checking it and completing MFA issues a separate long-lived cookie (`phpauth_trust`, distinct from the session cookie) containing a random token; only its SHA-256 hash is ever stored server-side, in the trusted-device ledger. On future logins, if that cookie is present and matches an unexpired ledger entry for the same username, the second factor is skipped entirely — straight to a finalized session, same as a password-only account.
+
+The check is against the user's **current** `trust_device_days` setting every time, not a value baked in when the device was trusted — so setting it to `0` for a user immediately stops honoring any tokens already issued to them, not just future ones. Revoke a specific user's remembered devices (lost or stolen laptop, etc.) with:
+
+```bash
+authctl mfa untrust <username>
+```
+
+`authctl mfa merge` also prunes expired ledger entries as routine housekeeping, safe to run anytime.
 
 ### MFA security notes
 
@@ -304,6 +321,7 @@ Define any of these before requiring `mfa_store.php` (transitively, before `auth
 - The ntfy challenge is deliberately low-entropy (2 characters) — the same technique as Microsoft Authenticator's "number matching." Its job is defeating blind push-fatigue spam-approval attacks, not brute-force resistance, and it does **not** defend against a real-time adversary-in-the-middle relaying a live phishing session.
 - **The code is shown only on the browser doing the sign-in, never in the push notification itself.** The push is a content-free "someone's signing in, check your screen" notice. This is what makes number-matching actually work: mere read access to the ntfy topic tells an attacker nothing, since they'd also need eyes on the live login screen to know what to reply with. Embedding the code in the push instead — so the phone just echoes back what it was told — would collapse the whole mechanism to "anyone who can read this topic can approve," which defeats the point of a second factor entirely.
 - `qrencode` is invoked with the data piped through **stdin**, never as a command-line argument — an argv value briefly appears in the process table, readable by any other local user running `ps aux` at the wrong moment.
+- The device-trust cookie is a genuine security trade-off, not a free feature — a stolen device with a still-valid trust cookie gets in with just the password, no second factor, for whatever's left of the trust window. That's the accepted, standard trade-off every major MFA implementation offers; `trust_device_days = 0` opts a specific user out of it entirely, and `authctl mfa untrust` closes a specific exposure after the fact.
 - All writes to the overlay/ledger files share one locking helper (`flock`-guarded read-modify-write + atomic rename), used identically by the web runtime and `authctl` — there's no second, independently-written implementation to drift out of sync.
 - Backup codes are bcrypt-hashed at rest everywhere, exactly like passwords.
 

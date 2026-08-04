@@ -53,6 +53,9 @@ function mfa_normalize_ini_section(array $section): array {
         $codes = $section['backup_codes'];
         $rec['backup_codes'] = array_values(is_array($codes) ? $codes : [$codes]);
     }
+    if (array_key_exists('trust_device_days', $section)) {
+        $rec['trust_device_days'] = (int)$section['trust_device_days'];
+    }
     return $rec;
 }
 
@@ -102,6 +105,9 @@ function mfa_render_ini_users(array $users): string {
             foreach ($rec['backup_codes'] as $hash) {
                 $lines[] = 'backup_codes[] = "' . mfa_ini_safe($hash) . "\"\n";
             }
+        }
+        if (array_key_exists('trust_device_days', $rec)) {
+            $lines[] = 'trust_device_days = ' . (int)$rec['trust_device_days'] . "\n";
         }
         $lines[] = "\n";
     }
@@ -205,6 +211,9 @@ function mfa_merged_user(string $username): ?array {
         'totp_secret'   => array_key_exists('totp_secret', $mainRec) ? $mainRec['totp_secret'] : ($localRec['totp_secret'] ?? null),
         'ntfy_url'      => array_key_exists('ntfy_url', $mainRec) ? $mainRec['ntfy_url'] : ($localRec['ntfy_url'] ?? null),
         'backup_codes'  => array_key_exists('backup_codes', $mainRec) ? $mainRec['backup_codes'] : ($localRec['backup_codes'] ?? []),
+        'trust_device_days' => array_key_exists('trust_device_days', $mainRec)
+            ? $mainRec['trust_device_days']
+            : ($localRec['trust_device_days'] ?? AUTH_MFA_TRUST_DEVICE_DAYS),
     ];
 }
 
@@ -400,4 +409,134 @@ function mfa_verify_backup_code(string $username, array $storedHashes, string $s
         }
     }
     return false;
+}
+
+// ---------------------------------------------------------------------
+// Trusted devices — "remember this device" ("skip MFA on this browser
+// for N days"). One section per token, keyed by the token's SHA-256 hash
+// (the token itself is 256 bits of CSPRNG output, not a human-guessable
+// secret, so a fast hash is correct here — unlike backup codes, which use
+// bcrypt specifically to resist offline brute force of a low-entropy value).
+// ---------------------------------------------------------------------
+
+function mfa_read_trusted_devices(string $file): array {
+    if (!is_file($file)) {
+        return [];
+    }
+    $raw = parse_ini_file($file, true, INI_SCANNER_RAW);
+    if ($raw === false) {
+        return [];
+    }
+    $out = [];
+    foreach ($raw as $tokenHash => $section) {
+        if (!is_array($section)) {
+            continue;
+        }
+        $out[$tokenHash] = [
+            'username' => (string)($section['username'] ?? ''),
+            'expires'  => (int)($section['expires'] ?? 0),
+        ];
+    }
+    return $out;
+}
+
+function mfa_render_trusted_devices(array $devices): string {
+    $lines = ["; trusted-device ledger — managed by simplewebauth\n\n"];
+    foreach ($devices as $tokenHash => $rec) {
+        $lines[] = '[' . $tokenHash . "]\n";
+        $lines[] = 'username = "' . mfa_ini_safe($rec['username']) . "\"\n";
+        $lines[] = 'expires = ' . (int)$rec['expires'] . "\n\n";
+    }
+    return implode('', $lines);
+}
+
+function mfa_locked_update_trusted_devices(string $file, callable $mutator): void {
+    $dir = dirname($file);
+    if (!is_dir($dir) && !@mkdir($dir, 0700, true)) {
+        throw new RuntimeException("Cannot create directory: $dir");
+    }
+    $lockHandle = fopen($file . '.lock', 'c');
+    if ($lockHandle === false || !flock($lockHandle, LOCK_EX)) {
+        if (is_resource($lockHandle)) {
+            fclose($lockHandle);
+        }
+        throw new RuntimeException("Cannot acquire lock for: $file");
+    }
+    try {
+        $current = mfa_read_trusted_devices($file);
+        $updated = $mutator($current);
+        mfa_atomic_write($file, mfa_render_trusted_devices($updated));
+    } finally {
+        flock($lockHandle, LOCK_UN);
+        fclose($lockHandle);
+    }
+}
+
+/** Issues a new trust token for $username, valid $days days. Returns the plaintext token (for the cookie) — only its hash is ever stored. */
+function mfa_issue_trust_token(string $username, int $days): string {
+    $token = rtrim(strtr(base64_encode(random_bytes(32)), '+/', '-_'), '=');
+    $hash = hash('sha256', $token);
+    $expires = time() + ($days * 86400);
+    mfa_locked_update_trusted_devices(AUTH_TRUSTED_DEVICES_FILE, function (array $devices) use ($hash, $username, $expires) {
+        $devices[$hash] = ['username' => $username, 'expires' => $expires];
+        return $devices;
+    });
+    return $token;
+}
+
+/** True if $token is a valid, unexpired trust token issued for exactly $username. */
+function mfa_check_trust_token(string $username, string $token): bool {
+    if ($token === '') {
+        return false;
+    }
+    $devices = mfa_read_trusted_devices(AUTH_TRUSTED_DEVICES_FILE);
+    $rec = $devices[hash('sha256', $token)] ?? null;
+    if ($rec === null) {
+        return false;
+    }
+    return $rec['username'] === $username && $rec['expires'] > time();
+}
+
+/** Revokes every trusted device for $username (lost/stolen device, `authctl mfa untrust`). Returns count removed. */
+function mfa_revoke_trust_devices(string $username): int {
+    $removed = 0;
+    mfa_locked_update_trusted_devices(AUTH_TRUSTED_DEVICES_FILE, function (array $devices) use ($username, &$removed) {
+        foreach ($devices as $hash => $rec) {
+            if ($rec['username'] === $username) {
+                unset($devices[$hash]);
+                $removed++;
+            }
+        }
+        return $devices;
+    });
+    return $removed;
+}
+
+/** Housekeeping — drops expired entries regardless of user. Returns count removed. */
+function mfa_prune_expired_trust_devices(): int {
+    $removed = 0;
+    mfa_locked_update_trusted_devices(AUTH_TRUSTED_DEVICES_FILE, function (array $devices) use (&$removed) {
+        $now = time();
+        foreach ($devices as $hash => $rec) {
+            if ($rec['expires'] <= $now) {
+                unset($devices[$hash]);
+                $removed++;
+            }
+        }
+        return $devices;
+    });
+    return $removed;
+}
+
+/** Issues a token and sets the browser cookie in one step — the only entry point mfa_verify.php/mfa_check.php should use. */
+function mfa_set_trust_cookie(string $username, int $days): void {
+    $token = mfa_issue_trust_token($username, $days);
+    $secure = !empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off';
+    setcookie(AUTH_MFA_TRUST_COOKIE_NAME, $token, [
+        'expires'  => time() + ($days * 86400),
+        'path'     => '/',
+        'secure'   => $secure,
+        'httponly' => true,
+        'samesite' => 'Lax',
+    ]);
 }
