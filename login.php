@@ -29,13 +29,8 @@ $error = ($_GET['notice'] ?? '') === 'mfa_reset'
     : '';
 $redirect = $_GET['redirect'] ?? $_POST['redirect'] ?? '';
 
-// Validate redirect stays on the same host
-function safe_redirect(string $url): string {
-    if (empty($url)) return '/';
-    $host = parse_url($url, PHP_URL_HOST);
-    if ($host && $host !== $_SERVER['HTTP_HOST']) return '/';
-    return $url;
-}
+// Validate redirect stays on this site (allowlist — see safe_redirect())
+require_once AUTH_DIR . '/mfa_session.php';
 $redirect = safe_redirect($redirect);
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {

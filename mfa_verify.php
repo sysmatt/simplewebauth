@@ -61,7 +61,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         if ($matched) {
-            $redirect = $_SESSION['mfa_pending_redirect'] ?? '/';
+            $redirect = safe_redirect($_SESSION['mfa_pending_redirect'] ?? '/');
             $remember = !empty($_POST['remember_device']) && (int)$user['trust_device_days'] > 0;
             mfa_clear_pending_session();
             session_regenerate_id(true);
@@ -234,7 +234,10 @@ $b = auth_branding();
       .then(function (r) { return r.json(); })
       .then(function (data) {
         if (data.status === 'approved') {
-          window.location = data.redirect;
+          // Server already validates this (safe_redirect); never navigate to
+          // anything but a same-site path or an http(s) URL regardless.
+          var dest = String(data.redirect || '/');
+          window.location = /^(\/(?![\/\\])|https?:\/\/)/i.test(dest) ? dest : '/';
         } else if (data.status === 'reset') {
           window.location = loginUrl + '?notice=mfa_reset';
         } else if (data.status === 'no_session') {
