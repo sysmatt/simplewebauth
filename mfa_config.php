@@ -63,3 +63,25 @@ if (!defined('AUTH_MFA_TRUST_DEVICE_DAYS')) {
 if (!defined('AUTH_MFA_TRUST_COOKIE_NAME')) {
     define('AUTH_MFA_TRUST_COOKIE_NAME', 'phpauth_trust');
 }
+
+// Per-account brute-force lockout, per host. Wrong passwords and every MFA
+// strike (wrong/replayed code, ntfy timeout) count against the account; the
+// count only resets on a COMPLETE sign-in, never on a correct password alone.
+// AUTH_LOCKOUT_MAX_FAILURES within AUTH_LOCKOUT_WINDOW seconds locks the
+// account for AUTH_LOCKOUT_DURATION seconds (`authctl unlock` clears it early).
+// The same file records each user's last accepted TOTP time step (replay guard).
+if (!defined('AUTH_LOGIN_STATE_FILE')) {
+    define('AUTH_LOGIN_STATE_FILE', '/var/local/simplewebauth/login_state_local.ini');
+}
+
+if (!defined('AUTH_LOCKOUT_MAX_FAILURES')) {
+    define('AUTH_LOCKOUT_MAX_FAILURES', 5);
+}
+
+if (!defined('AUTH_LOCKOUT_WINDOW')) {
+    define('AUTH_LOCKOUT_WINDOW', 900); // 15 minutes
+}
+
+if (!defined('AUTH_LOCKOUT_DURATION')) {
+    define('AUTH_LOCKOUT_DURATION', 900); // 15 minutes
+}

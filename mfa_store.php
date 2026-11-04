@@ -14,6 +14,9 @@
  *                                            contains password_hash.
  *   - burned-codes ledger (AUTH_BURNED_CODES_FILE) — one-time-use tracking
  *                                            for backup codes, per host.
+ *   - login state (AUTH_LOGIN_STATE_FILE) — per-host failure counters,
+ *                                            lockouts, and last accepted TOTP
+ *                                            step (replay guard).
  *
  * Merge rule: field-by-field, not record-by-record. If the main file defines
  * a field for a user at all, its value wins outright — even false/empty.
@@ -539,4 +542,191 @@ function mfa_set_trust_cookie(string $username, int $days): void {
         'httponly' => true,
         'samesite' => 'Lax',
     ]);
+}
+
+// ---------------------------------------------------------------------
+// Login state — per-account brute-force lockout + TOTP replay guard, per
+// host. One section per username; only usernames that exist in the users
+// file are ever written, so junk usernames can't grow the file.
+//   fail_count / fail_first — failures in the current AUTH_LOCKOUT_WINDOW
+//   locked_until            — unix time the lockout ends (absent = unlocked)
+//   totp_last_step          — last TOTP time step accepted for sign-in
+// ---------------------------------------------------------------------
+
+const AUTH_LOGIN_STATE_FIELDS = ['fail_count', 'fail_first', 'locked_until', 'totp_last_step'];
+
+function mfa_read_login_state(string $file): array {
+    if (!is_file($file)) {
+        return [];
+    }
+    $raw = parse_ini_file($file, true, INI_SCANNER_RAW);
+    if ($raw === false) {
+        return [];
+    }
+    $out = [];
+    foreach ($raw as $username => $section) {
+        if (!is_array($section)) {
+            continue;
+        }
+        $rec = [];
+        foreach (AUTH_LOGIN_STATE_FIELDS as $f) {
+            if (isset($section[$f])) {
+                $rec[$f] = (int)$section[$f];
+            }
+        }
+        $out[(string)$username] = $rec;
+    }
+    return $out;
+}
+
+function mfa_render_login_state(array $state): string {
+    $lines = ["; login state (failure counters, lockouts, TOTP replay guard) — managed by simplewebauth\n\n"];
+    foreach ($state as $username => $rec) {
+        $rec = array_intersect_key($rec, array_flip(AUTH_LOGIN_STATE_FIELDS));
+        if (empty($rec)) {
+            continue;
+        }
+        $lines[] = '[' . $username . "]\n";
+        foreach ($rec as $f => $v) {
+            $lines[] = $f . ' = ' . (int)$v . "\n";
+        }
+        $lines[] = "\n";
+    }
+    return implode('', $lines);
+}
+
+function mfa_locked_update_login_state(callable $mutator): void {
+    $file = AUTH_LOGIN_STATE_FILE;
+    $dir = dirname($file);
+    if (!is_dir($dir) && !@mkdir($dir, 0700, true)) {
+        throw new RuntimeException("Cannot create directory: $dir");
+    }
+    $lockHandle = fopen($file . '.lock', 'c');
+    if ($lockHandle === false || !flock($lockHandle, LOCK_EX)) {
+        if (is_resource($lockHandle)) {
+            fclose($lockHandle);
+        }
+        throw new RuntimeException("Cannot acquire lock for: $file");
+    }
+    try {
+        $current = mfa_read_login_state($file);
+        $updated = $mutator($current);
+        if ($updated !== $current) {
+            mfa_atomic_write($file, mfa_render_login_state($updated));
+        }
+    } finally {
+        flock($lockHandle, LOCK_UN);
+        fclose($lockHandle);
+    }
+}
+
+/** True while $username is locked out. Lock-free read — writes are atomic renames. */
+function auth_lockout_active(string $username): bool {
+    $rec = mfa_read_login_state(AUTH_LOGIN_STATE_FILE)[$username] ?? [];
+    return ($rec['locked_until'] ?? 0) > time();
+}
+
+/**
+ * Counts one failure (wrong password, or any MFA strike) against $username and
+ * locks the account once AUTH_LOCKOUT_MAX_FAILURES land within
+ * AUTH_LOCKOUT_WINDOW. Returns true if the account is locked after this call.
+ *
+ * Fails OPEN on a storage error (logged): a missing/unwritable state dir must
+ * not take down sign-in for hosts on the legacy .php users file. The nginx
+ * rate limit still applies in that case.
+ */
+function auth_record_failure(string $username): bool {
+    $locked = false;
+    try {
+        mfa_locked_update_login_state(function (array $state) use ($username, &$locked) {
+            $now = time();
+            $rec = $state[$username] ?? [];
+            if (($rec['locked_until'] ?? 0) > $now) {
+                $locked = true;   // already locked — don't extend it
+                return $state;
+            }
+            unset($rec['locked_until']);
+            if (($rec['fail_first'] ?? 0) + AUTH_LOCKOUT_WINDOW <= $now) {
+                $rec['fail_count'] = 0;
+                $rec['fail_first'] = $now;
+            }
+            $rec['fail_count'] = ($rec['fail_count'] ?? 0) + 1;
+            if ($rec['fail_count'] >= AUTH_LOCKOUT_MAX_FAILURES) {
+                $rec['locked_until'] = $now + AUTH_LOCKOUT_DURATION;
+                unset($rec['fail_count'], $rec['fail_first']);
+                $locked = true;
+                error_log("simplewebauth: account '$username' locked for " . AUTH_LOCKOUT_DURATION
+                    . "s after " . AUTH_LOCKOUT_MAX_FAILURES . " failed sign-in attempts");
+            }
+            $state[$username] = $rec;
+            return $state;
+        });
+    } catch (RuntimeException $e) {
+        error_log('simplewebauth: cannot record login failure: ' . $e->getMessage());
+    }
+    return $locked;
+}
+
+/** Clears failure counters after a COMPLETE sign-in. Leaves totp_last_step alone. Fails open (logged). */
+function auth_clear_failures(string $username): void {
+    $rec = mfa_read_login_state(AUTH_LOGIN_STATE_FILE)[$username] ?? [];
+    if (!isset($rec['fail_count']) && !isset($rec['fail_first']) && !isset($rec['locked_until'])) {
+        return;   // nothing to clear — skip the write on the common path
+    }
+    try {
+        mfa_locked_update_login_state(function (array $state) use ($username) {
+            unset($state[$username]['fail_count'], $state[$username]['fail_first'], $state[$username]['locked_until']);
+            return $state;
+        });
+    } catch (RuntimeException $e) {
+        error_log('simplewebauth: cannot clear login failures: ' . $e->getMessage());
+    }
+}
+
+/** Admin unlock (`authctl unlock`). Returns true if the user had a lockout or failures recorded. */
+function auth_unlock(string $username): bool {
+    $had = false;
+    mfa_locked_update_login_state(function (array $state) use ($username, &$had) {
+        $rec = $state[$username] ?? [];
+        $had = isset($rec['fail_count']) || isset($rec['locked_until']);
+        unset($state[$username]['fail_count'], $state[$username]['fail_first'], $state[$username]['locked_until']);
+        return $state;
+    });
+    return $had;
+}
+
+/** Usernames with a lockout or failures in the current window, for `authctl locked`. */
+function auth_list_lockouts(): array {
+    $now = time();
+    $out = [];
+    foreach (mfa_read_login_state(AUTH_LOGIN_STATE_FILE) as $username => $rec) {
+        $lockedUntil = $rec['locked_until'] ?? 0;
+        $inWindow = ($rec['fail_first'] ?? 0) + AUTH_LOCKOUT_WINDOW > $now;
+        if ($lockedUntil > $now || (($rec['fail_count'] ?? 0) > 0 && $inWindow)) {
+            $out[$username] = [
+                'locked_until' => $lockedUntil > $now ? $lockedUntil : 0,
+                'fail_count'   => $inWindow ? ($rec['fail_count'] ?? 0) : 0,
+            ];
+        }
+    }
+    return $out;
+}
+
+/**
+ * Atomically accepts TOTP time step $step for $username only if it is newer
+ * than the last one accepted, then records it. Returns false for a replay
+ * (same code again, or an older code within the drift window). Fails CLOSED
+ * — throws on storage error, same as the backup-code ledger.
+ */
+function mfa_totp_claim_step(string $username, int $step): bool {
+    $fresh = false;
+    mfa_locked_update_login_state(function (array $state) use ($username, $step, &$fresh) {
+        if ($step <= ($state[$username]['totp_last_step'] ?? PHP_INT_MIN)) {
+            return $state;
+        }
+        $state[$username]['totp_last_step'] = $step;
+        $fresh = true;
+        return $state;
+    });
+    return $fresh;
 }

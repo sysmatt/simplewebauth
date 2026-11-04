@@ -13,6 +13,8 @@
  *   php manage_users.php mfa merge
  *   php manage_users.php mfa disable <username>
  *   php manage_users.php mfa untrust <username>
+ *   php manage_users.php locked
+ *   php manage_users.php unlock <username>
  */
 
 if (php_sapi_name() !== 'cli') {
@@ -271,6 +273,27 @@ HELP;
         }
         break;
 
+    case 'locked':
+        $rows = auth_list_lockouts();
+        if (empty($rows)) {
+            echo "No locked accounts or recent failures.\n";
+            break;
+        }
+        foreach ($rows as $u => $r) {
+            echo $r['locked_until'] > 0
+                ? sprintf("%-20s LOCKED until %s\n", $u, date('Y-m-d H:i:s', $r['locked_until']))
+                : sprintf("%-20s %d recent failure(s)\n", $u, $r['fail_count']);
+        }
+        break;
+
+    case 'unlock':
+        $username = $argv[2] ?? '';
+        if ($username === '') { echo "Usage: php manage_users.php unlock <username>\n"; exit(1); }
+        echo auth_unlock($username)
+            ? "Cleared lockout/failures for '$username'.\n"
+            : "No lockout or failures recorded for '$username'.\n";
+        break;
+
     default:
         echo <<<HELP
 manage_users.php — auth_users manager
@@ -282,6 +305,8 @@ Commands:
   passwd <username> [password]  Change a user's password
   migrate [target.ini]          Convert legacy auth_users.php to .ini format
   mfa <subcommand>               MFA management — run 'mfa' with no args for help
+  locked                        List locked accounts and recent failures
+  unlock <username>             Clear a lockout and failure count
 
 HELP;
 }

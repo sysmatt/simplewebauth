@@ -71,18 +71,30 @@ function totp_code_at(string $secret, int $timestamp): string {
     return str_pad((string)$code, TOTP_DIGITS, '0', STR_PAD_LEFT);
 }
 
-/** Verifies a 6-digit code allowing +/- $window steps of clock drift. */
-function totp_verify(string $secret, string $code, int $window = 1, ?int $timestamp = null): bool {
+/**
+ * Returns the TOTP time step (counter) that $code matches, allowing +/- $window
+ * steps of clock drift, or null if none match. Callers that log a user in must
+ * also reject steps at or before the last one accepted (mfa_totp_claim_step()),
+ * or the same code can be replayed for the whole drift window.
+ */
+function totp_match_step(string $secret, string $code, int $window = 1, ?int $timestamp = null): ?int {
     $code = trim($code);
     if (!preg_match('/^\d{' . TOTP_DIGITS . '}$/', $code)) {
-        return false;
+        return null;
     }
     $timestamp = $timestamp ?? time();
+    $matched = null;
+    // No early exit: every candidate is computed, so timing doesn't reveal which step matched.
     for ($i = -$window; $i <= $window; $i++) {
-        $candidate = totp_code_at($secret, $timestamp + ($i * TOTP_PERIOD));
-        if (hash_equals($candidate, $code)) {
-            return true;
+        $ts = $timestamp + ($i * TOTP_PERIOD);
+        if (hash_equals(totp_code_at($secret, $ts), $code) && $matched === null) {
+            $matched = intdiv($ts, TOTP_PERIOD);
         }
     }
-    return false;
+    return $matched;
+}
+
+/** Verifies a 6-digit code allowing +/- $window steps of clock drift. No replay protection — see totp_match_step(). */
+function totp_verify(string $secret, string $code, int $window = 1, ?int $timestamp = null): bool {
+    return totp_match_step($secret, $code, $window, $timestamp) !== null;
 }

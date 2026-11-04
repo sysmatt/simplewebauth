@@ -15,6 +15,7 @@ USERS_FILE="${USERS_DIR}/auth_users.php"
 LOCAL_DIR="/var/local/simplewebauth"
 LOCAL_FILE="${LOCAL_DIR}/auth_users_local.ini"
 LOCAL_TRUST_FILE="${LOCAL_DIR}/trusted_devices_local.ini"
+LOCAL_STATE_FILE="${LOCAL_DIR}/login_state_local.ini"
 
 # ── web user detection ────────────────────────────────────────────────────────
 # Override by setting SIMPLEWEBAUTH_WEB_USER in the environment before calling authctl.
@@ -106,6 +107,8 @@ Commands:
   passwd <username>       Change a user's password
   migrate [target.ini]    Convert legacy auth_users.php to .ini (required for MFA)
   mfa <subcommand>        MFA management — run 'authctl mfa' for help
+  locked                  List locked-out accounts and recent failures
+  unlock <username>       Clear a user's lockout and failure count
   check                   Verify environment and show configuration
 
 Options:
@@ -271,6 +274,22 @@ cmd_mfa() {
     esac
 }
 
+cmd_locked() {
+    run locked
+}
+
+cmd_unlock() {
+    [[ $# -lt 1 || "${1:-}" == "-h" || "${1:-}" == "--help" ]] && {
+        echo "Usage: authctl unlock <username>"
+        echo
+        echo "Clears a brute-force lockout (and the failure count) for a user on this host."
+        [[ $# -lt 1 ]] && exit 1 || exit 0
+    }
+    run unlock "$1"
+    fix_local_perms "$LOCAL_STATE_FILE"
+    fix_local_perms "${LOCAL_STATE_FILE}.lock"
+}
+
 cmd_check() {
     local ok=true
     local web_user
@@ -331,6 +350,8 @@ case "$1" in
     passwd|password) shift; cmd_passwd "$@" ;;
     migrate)         shift; cmd_migrate "$@" ;;
     mfa)             shift; cmd_mfa "$@" ;;
+    locked)          shift; cmd_locked "$@" ;;
+    unlock)          shift; cmd_unlock "$@" ;;
     check)           shift; cmd_check "$@" ;;
     -h|--help|help)  usage_main; exit 0 ;;
     *)               echo "Unknown command: $1"; echo; usage_main >&2; exit 1 ;;

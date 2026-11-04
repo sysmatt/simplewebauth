@@ -26,6 +26,7 @@ Simple session-based authentication for small PHP utilities. Supports named user
 | `mfa_enroll_check.php` | Background poll endpoint `mfa_enroll.php` uses for ntfy replies |
 | `.htaccess` | Blocks web access to sensitive files (Apache) |
 | `simplewebauth-nginx.conf` | Nginx snippet — equivalent protection for Nginx servers |
+| `simplewebauth-ratelimit-nginx.conf` | Nginx `conf.d/` file — per-IP rate limit on sign-in POSTs |
 | `simplewebauth-config.php.EXAMPLE` | Template for docroot UI customization (copy to parent directory) |
 
 ## Setup
@@ -125,6 +126,10 @@ authctl mfa pending
 authctl mfa merge
 authctl mfa disable <username>
 authctl mfa untrust <username>
+
+# Brute-force lockouts (per host) — see "Security notes"
+authctl locked
+authctl unlock <username>
 ```
 
 ### Help
@@ -179,7 +184,9 @@ Edit `auth.php` directly to change these. MFA adds its own set of constants — 
 - Verify Apache has `AllowOverride All` (or at minimum `AllowOverride AuthConfig Limit`) enabled for your directory, otherwise `.htaccess` rules are silently ignored.
 - `/etc/simplewebauth/` is created with `root:<webuser> 750` and `auth_users.php` with `root:<webuser> 640` — the web server process can read but not write the file, and other system users cannot read it at all.
 - Sessions use `HttpOnly`, `SameSite=Lax`, and `Strict` mode cookies. If your site runs over HTTPS, the `Secure` flag is added automatically.
-- Login attempts are throttled with a 300ms delay on failure to slow brute force attacks. For internet-facing tools, consider adding fail2ban or rate limiting at the Apache/nginx level as well.
+- **Per-account lockout.** Wrong passwords and every MFA strike (wrong or replayed code, ntfy timeout) count against the account; 5 failures within 15 minutes lock it for 15 minutes (`AUTH_LOCKOUT_*`). The count resets only on a *complete* sign-in — a correct password alone never resets it, so knowing the password doesn't buy unlimited second-factor guesses. A locked account gets the same "Invalid username or password." as a wrong password. Lockouts are per host; `authctl locked` lists them and `authctl unlock <user>` clears one early. Trade-off: anyone who knows a username can lock it out for 15 minutes.
+- **TOTP codes are single-use.** Each user's last accepted TOTP time step is recorded; a code (or an older one still inside the ±30s drift window) can't be accepted twice. Per host, like the backup-code ledger.
+- **Rate limit sign-in at the web server too.** The lockout can't see one address spraying many usernames. For nginx, install `simplewebauth-ratelimit-nginx.conf` (see [Nginx](#nginx)); for Apache, use fail2ban or mod_evasive. A 300ms delay on each failure also remains.
 - The `redirect` parameter on the login page is validated to prevent open redirects — only same-host URLs are allowed.
 - MFA-specific security notes (ntfy topic secrecy, backup-code guarantees, push-fatigue defense model) are covered in [Multi-factor authentication](#multi-factor-authentication).
 
@@ -279,6 +286,7 @@ To fold self-enrolled data into your vault source: `authctl mfa pending` lists i
 | Self-enrollment overlay | `AUTH_USERS_LOCAL_FILE` (default `/var/local/simplewebauth/auth_users_local.ini`) | the web server process |
 | Burned backup-code ledger | `AUTH_BURNED_CODES_FILE` (default `/var/local/simplewebauth/burned_codes_local.ini`) | the web server process |
 | Trusted-device ledger | `AUTH_TRUSTED_DEVICES_FILE` (default `/var/local/simplewebauth/trusted_devices_local.ini`) | the web server process |
+| Login state (lockouts, TOTP replay guard) | `AUTH_LOGIN_STATE_FILE` (default `/var/local/simplewebauth/login_state_local.ini`) | the web server process |
 
 The main file stays exactly where host configuration belongs (`/etc/simplewebauth/`), read-only to the web server, unchanged from today. The two overlay files live under `/var/local/simplewebauth/` instead — the FHS convention for a locally-installed, unpackaged service's own runtime state — and are created automatically (`0700`, owned by the web user) the first time anything is written to them. Both directories/files need `authctl`'s permission-fixing step re-run if a root-run command (`authctl mfa merge`/`mfa disable`) touches the overlay file; `authctl` does this for you automatically.
 
@@ -300,6 +308,10 @@ Backup-code one-time-use is a **per-host guarantee**, not a fleet-wide one — a
 | `AUTH_TRUSTED_DEVICES_FILE` | `/var/local/simplewebauth/trusted_devices_local.ini` | Trusted-device ledger path |
 | `AUTH_MFA_TRUST_DEVICE_DAYS` | `60` | Default "remember this device" duration — overridable per user via `trust_device_days` in the `.ini` record; `0` disables the feature for that user |
 | `AUTH_MFA_TRUST_COOKIE_NAME` | `phpauth_trust` | Cookie name for the device-trust token |
+| `AUTH_LOGIN_STATE_FILE` | `/var/local/simplewebauth/login_state_local.ini` | Failure counters, lockouts, last accepted TOTP step |
+| `AUTH_LOCKOUT_MAX_FAILURES` | `5` | Failures (password + MFA strikes) that lock an account |
+| `AUTH_LOCKOUT_WINDOW` | `900` (15 min) | Window those failures must fall within |
+| `AUTH_LOCKOUT_DURATION` | `900` (15 min) | How long the lockout lasts |
 
 Define any of these before requiring `mfa_store.php` (transitively, before `auth.php`/`login.php` run) to override.
 
@@ -374,6 +386,12 @@ server {
 ```
 
 The pattern matches `manage_users.php` inside any folder named `simplewebauth`, at any depth under the docroot. `auth_users.php` no longer needs to be blocked — it lives outside the docroot entirely.
+
+**Rate-limit sign-in (recommended for anything internet-facing):** `simplewebauth-ratelimit-nginx.conf` is the one file that *does* go in `conf.d/` — it's only a `map` + `limit_req_zone` + `limit_req` at the `http {}` level, so it covers every vhost with no per-server edits. It limits only POSTs to `login.php`/`mfa_verify.php` (10 burst, then 10/min per client IP, HTTP 429 over the limit); page loads and the MFA push polling are untouched. Behind a reverse proxy, set up `realip` first or all clients share one bucket.
+
+```bash
+sudo cp simplewebauth-ratelimit-nginx.conf /etc/nginx/conf.d/simplewebauth-ratelimit.conf
+```
 
 Then reload Nginx:
 

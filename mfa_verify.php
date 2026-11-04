@@ -45,6 +45,14 @@ if ($user === null || empty($user['mfa_enabled'])) {
     exit;
 }
 
+// Locked out (here, on another tab, or by failures elsewhere) — a pending
+// session opened before the lock must not keep guessing.
+if (auth_lockout_active($username)) {
+    mfa_clear_pending_session();
+    header('Location: ' . mfa_relative_url('login.php') . '?notice=mfa_reset');
+    exit;
+}
+
 $error = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -55,7 +63,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $matched = false;
 
         if (preg_match('/^\d{6}$/', $code) && !empty($user['totp_secret'])) {
-            $matched = totp_verify($user['totp_secret'], $code);
+            // A valid code is accepted once: its time step must be newer than
+            // the last one accepted for this user, or it's a replay (strike).
+            $step = totp_match_step($user['totp_secret'], $code);
+            $matched = $step !== null && mfa_totp_claim_step($username, $step);
         } elseif (strlen($code) === AUTH_MFA_BACKUP_CODE_LENGTH && !empty($user['backup_codes'])) {
             $matched = mfa_verify_backup_code($username, $user['backup_codes'], $code);
         }
@@ -64,6 +75,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $redirect = safe_redirect($_SESSION['mfa_pending_redirect'] ?? '/');
             $remember = !empty($_POST['remember_device']) && (int)$user['trust_device_days'] > 0;
             mfa_clear_pending_session();
+            auth_clear_failures($username);
             session_regenerate_id(true);
             $_SESSION['auth_user'] = $username;
             $_SESSION['auth_time'] = time();
@@ -77,7 +89,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // Constant-time delay to slow brute force, same convention as login.php.
         usleep(300000);
 
-        if (mfa_register_strike()) {
+        // Counts against the account too (persists across fresh password
+        // logins), not just this pending session's 3 strikes.
+        $accountLocked = auth_record_failure($username);
+        if (mfa_register_strike() || $accountLocked) {
             mfa_clear_pending_session();
             header('Location: ' . mfa_relative_url('login.php') . '?notice=mfa_reset');
             exit;

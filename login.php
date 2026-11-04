@@ -47,7 +47,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         require_once AUTH_DIR . '/mfa_store.php';
         $user = $username !== '' ? mfa_merged_user($username) : null;
 
-        if ($user !== null && password_verify($password, $user['password_hash'])) {
+        // Per-account lockout (see AUTH_LOCKOUT_* in mfa_config.php). The
+        // password is still checked while locked so timing doesn't change,
+        // and a locked account gets the same generic error as a wrong
+        // password, so the lockout itself isn't an oracle.
+        $locked = $user !== null && auth_lockout_active($username);
+        $passwordOk = $user !== null && password_verify($password, $user['password_hash']);
+
+        if ($passwordOk && !$locked) {
             session_regenerate_id(true);
 
             // Trusted-device bypass — re-checked against the user's CURRENT
@@ -100,12 +107,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 exit;
             }
 
+            // Complete sign-in (no MFA, or a trusted device) — only now does
+            // the failure count reset. With MFA it resets in mfa_verify.php/
+            // mfa_check.php once the second factor passes, never here: a
+            // correct password alone must not buy fresh MFA guesses.
+            auth_clear_failures($username);
             $_SESSION['auth_user'] = $username;
             $_SESSION['auth_time'] = time();
             unset($_SESSION['csrf_token']);
             header('Location: ' . $redirect);
             exit;
         } else {
+            if ($user !== null && !$passwordOk && !$locked) {
+                auth_record_failure($username);
+            }
             // Constant-time delay to slow brute force
             usleep(300000);
             $error = 'Invalid username or password.';

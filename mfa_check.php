@@ -44,6 +44,10 @@ if (empty($_SESSION['mfa_ntfy_challenge'])) {
 }
 
 $username = $_SESSION['mfa_pending_user'];
+if (auth_lockout_active($username)) {
+    mfa_clear_pending_session();
+    mfa_check_respond(['status' => 'reset']);
+}
 $user = mfa_merged_user($username);
 if ($user === null || empty($user['ntfy_url'])) {
     mfa_check_respond(['status' => 'waiting', 'ntfy_active' => false]);
@@ -57,6 +61,7 @@ if (ntfy_check_challenge($user['ntfy_url'], $challenge, $since - 5)) {
     $redirect = safe_redirect($_SESSION['mfa_pending_redirect'] ?? '/');
     $remember = ($_GET['remember'] ?? '0') === '1' && (int)$user['trust_device_days'] > 0;
     mfa_clear_pending_session();
+    auth_clear_failures($username);
     session_regenerate_id(true);
     $_SESSION['auth_user'] = $username;
     $_SESSION['auth_time'] = time();
@@ -71,7 +76,8 @@ if ($elapsed > AUTH_MFA_NTFY_CHALLENGE_TTL) {
     // Counted exactly once, however many polls land after expiry.
     if (empty($_SESSION['mfa_ntfy_expired_counted'])) {
         $_SESSION['mfa_ntfy_expired_counted'] = true;
-        if (mfa_register_strike()) {
+        $accountLocked = auth_record_failure($username);
+        if (mfa_register_strike() || $accountLocked) {
             mfa_clear_pending_session();
             mfa_check_respond(['status' => 'reset']);
         }
